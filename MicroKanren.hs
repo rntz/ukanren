@@ -1,5 +1,4 @@
-{-# LANGUAGE TypeSynonymInstances, FunctionalDependencies, FlexibleInstances,
-    Rank2Types #-}
+{-# LANGUAGE FlexibleInstances #-}
 module MicroKanren where
 
 import Control.Applicative
@@ -23,27 +22,13 @@ data Term = V Var
 type Subst = IntMap Term
 type State = (Var, Subst)
 
+--  A monad that can generate, bind, and look-up variables.
 class Monad m => VarGen m where
     newVar :: m Var
     assign :: Var -> Term -> m ()
     deref :: Var -> m (Maybe Term)
 
-
--- Old version.
-newtype Search a = S { unS :: [a] } deriving (Show, Eq, Ord)
-
-instance Functor Search where fmap f (S x) = S (fmap f x)
-instance Applicative Search where pure = return; (<*>) = ap
-instance Monad Search where
-    return x = S [x]
-    S xs >>= f = S $ interleaves (map (unS . f) xs)
-
--- NB. not a law-abiding Alternative/MonadPlus instance: not associative.
-instance MonadPlus Search where mzero = empty; mplus = (<|>)
-instance Alternative Search where
-    empty = S []
-    S a <|> S b = S $ interleaves [a,b]
-
+-- Fair interleaving of finitely many lists.
 interleaves :: [[a]] -> [a]
 interleaves [] = []
 interleaves l = [x | x:_ <- l] ++ interleaves [xs | _:xs <- l]
@@ -51,8 +36,7 @@ interleaves l = [x | x:_ <- l] ++ interleaves [xs | _:xs <- l]
 interleave a b = interleaves [a,b]
 
 
--- New version: Search trees, which let me define the search algorithm
--- separately.
+-- Search trees, so we can define the search algorithm separately.
 data Tree a = Empty | Single a | Node (Tree a) (Tree a) deriving Show
 
 instance Functor Tree where fmap = liftM
@@ -68,7 +52,7 @@ instance MonadPlus Tree where mzero = empty; mplus = (<|>)
 instance Alternative Tree where empty = Empty; (<|>) = Node
 
 
--- Searches over trees.
+-- Search strategies over Trees.
 listify :: ([a] -> [a] -> [a]) -> Tree a -> [a]
 listify f Empty = []
 listify f (Single a) = [a]
@@ -76,12 +60,12 @@ listify f (Node l r) = f (listify f l) (listify f r)
 
 dfs = listify (++)
 
--- Is this a variety of bfs? Or is it its own thing?
+-- Not sure if there's a standard name for this search strategy.
 ifs = listify interleave
 
 -- Unfortunately we can't write iterated deepening as a function on Trees,
--- because of Haskell's call-by-need evaluation mechanism. So we'll just do a
--- plain BFS.
+-- because of Haskell's memoizing call-by-need evaluation. So we'll just do a
+-- plain old memory-hogging BFS.
 bfs t = search [] [t]
     -- we use the usual trick of encoding a queue as two stacks.
     where search [] [] = []
@@ -142,6 +126,8 @@ disjs, conjs :: [Goal] -> Goal
 disjs = msum
 conjs = sequence_
 
+
+-- Convenience function: fresh
 class Fresh a where fresh :: (a -> K b) -> K b
 instance Fresh Var where fresh f = newVar >>= f
 instance Fresh Term where fresh f = fresh (f . V)
@@ -164,5 +150,8 @@ fives = fresh fives_
 
 fivesR_ x = fivesR_ x <|> eq x (A (Int 5))
 fivesR = fresh fivesR_
+
+aAndB = do fresh $ \a -> eq a (A (Int 7))
+           fresh $ \b -> eq b (A (Int 5)) <|> eq b (A (Int 6))
 
 test t = take 10 $ runK t start
